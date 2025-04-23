@@ -47,12 +47,11 @@ class LitCovidDataset(Dataset):
     def __getitem__(self, index):
         row = self.data.iloc[index]
         
-        # Combine title and abstract
         text = str(row['title'])
         if pd.notna(row['abstract']) and row['abstract']:
             text += " " + str(row['abstract'])
             
-        # Preprocess text
+       
         text = text_preprocessing(text)
             
         # Tokenize text
@@ -99,7 +98,7 @@ class BERTClassifier(nn.Module):
         # Check if the model is DistilBERT (which doesn't use token_type_ids)
         self.is_distilbert = 'distilbert' in str(type(self.bert)).lower()
         
-        # Custom classification head with hidden layer
+        # Custom classification head 
         self.classifier = nn.Sequential(
             nn.Linear(D_in, H),
             nn.ReLU(),
@@ -122,7 +121,7 @@ class BERTClassifier(nn.Module):
         """
         # Feed input to BERT
         if self.is_distilbert:
-            # DistilBERT doesn't use token_type_ids
+            #No token_type_ids
             outputs = self.bert(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -130,8 +129,7 @@ class BERTClassifier(nn.Module):
                 output_hidden_states=False
             )
         else:
-            # Regular BERT uses token_type_ids
-            outputs = self.bert(
+            # We can delete this catch now that we know it.
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
@@ -147,11 +145,9 @@ class BERTClassifier(nn.Module):
         
         return logits
 
-# Training function with early stopping
-def train_model(model, train_dataloader, val_dataloader, optimizer, scheduler, device, patience=5, max_epochs=10):
-    """
-    Train the BERTClassifier model with early stopping.
-    """
+# TRAIN + EARLY STOPPING
+def train_model(model, train_dataloader, val_dataloader, optimizer, scheduler, device, patience, max_epochs):
+   
     model.train()
     best_val_f1 = 0
     no_improve_epochs = 0
@@ -172,23 +168,22 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, scheduler, d
         
         progress_bar = tqdm(train_dataloader, desc=f'Training Epoch {epoch+1}/{max_epochs}')
         for batch in progress_bar:
-            # Zero out any previously calculated gradients
+            
             optimizer.zero_grad()
             
-            # Load batch to GPU
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             token_type_ids = batch['token_type_ids'].to(device) if 'token_type_ids' in batch else None
             labels = batch['labels'].to(device)
             
-            # Perform a forward pass
+            # forward pass
             logits = model(input_ids, attention_mask, token_type_ids)
             
             # Compute loss
             loss_fn = nn.CrossEntropyLoss()
             loss = loss_fn(logits, labels)
             
-            # Perform a backward pass to calculate gradients
+            #  backward pass to calculate gradients
             loss.backward()
             
             # Clip the norm of the gradients to 1.0 to prevent "exploding gradients"
@@ -376,18 +371,8 @@ def create_dataloader(dataset, batch_size, is_train=True):
     return DataLoader(dataset, sampler=sampler, batch_size=batch_size)
 
 # Function to get a subset of a dataset
-def get_subset(dataset, fraction=0.1, random_state=42):
-    """
-    Get a random subset of a dataset.
-    
-    Args:
-        dataset: A pytorch Dataset object
-        fraction: The fraction of data to use (0.1 = 10%)
-        random_state: Seed for reproducibility
-        
-    Returns:
-        Subset of the dataset
-    """
+def get_subset(dataset, fraction, random_state=42):
+
     total_size = len(dataset)
     subset_size = int(total_size * fraction)
     
@@ -442,18 +427,18 @@ def main():
     val_dataset_bio = LitCovidDataset(val_data, bio_clinical_bert_tokenizer)
     test_dataset_bio = LitCovidDataset(test_data, bio_clinical_bert_tokenizer)
     
-    # Take 90% of the datasets
-    train_subset_clinical = get_subset(train_dataset_clinical, fraction=0.9)
-    val_subset_clinical = get_subset(val_dataset_clinical, fraction=0.9)
-    test_subset_clinical = get_subset(test_dataset_clinical, fraction=0.9)
+   
+    train_subset_clinical = get_subset(train_dataset_clinical, fraction=0.05)
+    val_subset_clinical = get_subset(val_dataset_clinical, fraction=0.05)
+    test_subset_clinical = get_subset(test_dataset_clinical, fraction=0.2)
     
-    train_subset_bio = get_subset(train_dataset_bio, fraction=0.9)
-    val_subset_bio = get_subset(val_dataset_bio, fraction=0.9)
-    test_subset_bio = get_subset(test_dataset_bio, fraction=0.9)
+    train_subset_bio = get_subset(train_dataset_bio, fraction=0.05)
+    val_subset_bio = get_subset(val_dataset_bio, fraction=0.05)
+    test_subset_bio = get_subset(test_dataset_bio, fraction=0.2)
     
-    print(f"Using {len(train_subset_clinical)} training samples (90% of original)")
-    print(f"Using {len(val_subset_clinical)} validation samples (90% of original)")
-    print(f"Using {len(test_subset_clinical)} test samples (90% of original)")
+    print(f"Using {len(train_subset_clinical)} training samples (5% of original)")
+    print(f"Using {len(val_subset_clinical)} validation samples (20% of original)")
+    print(f"Using {len(test_subset_clinical)} test samples (20% of original)")
     
     # Create dataloaders
     batch_size = 16
@@ -468,13 +453,13 @@ def main():
     # Training parameters
     learning_rate = 2e-5
     max_epochs = 100
-    patience = 2 
+    patience = 5
 
     # Initialize models
     clinical_bert_model = BERTClassifier('medicalai/ClinicalBERT').to(device)
     bio_clinical_bert_model = BERTClassifier('emilyalsentzer/Bio_ClinicalBERT').to(device)
     
-    # Train ClinicalBERT model
+    Train ClinicalBERT model
     print("\n=== Training ClinicalBERT Model ===")
     optimizer_clinical = AdamW(clinical_bert_model.parameters(), lr=learning_rate)
     total_steps = len(train_dataloader_clinical) * max_epochs
@@ -553,34 +538,7 @@ def main():
     print(f"  Precision: {bio_clinical_bert_results['micro_avg']['precision']:.4f}")
     print(f"  Recall: {bio_clinical_bert_results['micro_avg']['recall']:.4f}")
     print(f"  F1 Score: {bio_clinical_bert_results['micro_avg']['f1']:.4f}")
-    
-    # Create visualization to compare models
-    create_comparison_plot(clinical_bert_results, bio_clinical_bert_results)
 
-def create_comparison_plot(clinical_bert_results, bio_clinical_bert_results):
-    """Create bar plots to compare model performance"""
-    metrics = ['precision', 'recall', 'f1']
-    fig, axes = plt.subplots(len(TARGET_CLASSES), 3, figsize=(15, 12))
-    
-    for i, class_name in enumerate(TARGET_CLASSES):
-        for j, metric in enumerate(metrics):
-            clinical_val = clinical_bert_results[class_name][metric]
-            bio_val = bio_clinical_bert_results[class_name][metric]
-            
-            ax = axes[i, j]
-            bars = ax.bar(['ClinicalBERT', 'Bio_ClinicalBERT'], [clinical_val, bio_val])
-            ax.set_ylim(0, 1.0)
-            ax.set_title(f"{class_name} - {metric.capitalize()}")
-            
-            # Add values on top of bars
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                        f'{height:.3f}', ha='center', va='bottom')
-    
-    plt.tight_layout()
-    plt.savefig('model_comparison.png')
-    print("\nComparison plot saved as 'model_comparison.png'")
 
 if __name__ == "__main__":
     main()
